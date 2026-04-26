@@ -10,7 +10,7 @@ import requests
 # CONFIGURATION
 # =====================================
 # URL raw GitHub untuk file ticker
-GITHUB_RAW_BASE = "https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/data/tickers/"
+GITHUB_RAW_BASE = "https://github.com/nosrednaluapnhoj/saham/blob/main/data/tickers/"
 
 # Simpan ke storage HP
 BASE_STORAGE = "/storage/emulated/0/Saham"
