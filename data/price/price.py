@@ -10,7 +10,7 @@ import requests
 # CONFIGURATION
 # =====================================
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/nosrednaluapnhoj/saham/main/data/tickers/"
-BASE_STORAGE = "/storage/emulated/0/Saham/Indonesia"
+BASE_STORAGE = "/storage/emulated/0/Saham"
 START_DATE_DEFAULT = "2000-01-01"
 END_DATE = datetime.today().strftime("%Y-%m-%d")
 DELAY_MIN = 1

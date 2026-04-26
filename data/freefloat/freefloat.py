@@ -8,14 +8,14 @@ import sys
 import concurrent.futures
 from io import StringIO
 import contextlib
+import requests
 
 # ==============================
 # CONFIGURATION
 # ==============================
-TICKER_FILE = "ticker.txt"
-
-# Simpan ke HP
-DB_PATH = "/storage/emulated/0/Saham/Indonesia/freefloat.db"
+GITHUB_RAW_BASE = "https://raw.githubusercontent.com/nosrednaluapnhoj/saham/main/data/tickers/"
+BASE_STORAGE = "/storage/emulated/0/Saham"
+DB_NAME = "freefloat.db"
 
 DELAY_MIN = 1
 DELAY_MAX = 3
@@ -35,50 +35,56 @@ def suppress_stderr():
         sys.stderr = old_stderr
 
 # ==============================
-# LOAD TICKERS (CLEAN)
+# GET TICKER FILES FROM GITHUB
 # ==============================
-def load_tickers(filename):
-    tickers = set()
-
+def get_ticker_files():
+    """Ambil daftar file .txt dari folder data/tickers di GitHub"""
+    api_url = "https://api.github.com/repos/nosrednaluapnhoj/saham/contents/data/tickers"
     try:
-        with open(filename, "r") as f:
-            for line in f:
-                t = line.strip().upper()
-                if not t:
-                    continue
-
-                # hapus suffix (.JK, dll)
-                t_clean = t.split(".")[0]
-                tickers.add(t_clean)
-
-    except FileNotFoundError:
-        print(f"❌ File {filename} tidak ditemukan")
-        return []
-
-    return sorted(tickers)
+        response = requests.get(api_url, timeout=10)
+        if response.status_code == 200:
+            files = [f['name'] for f in response.json() if f['name'].endswith('.txt')]
+            return sorted(files)
+    except:
+        pass
+    return []
 
 # ==============================
-# GET FREE FLOAT (ALWAYS UPDATE)
+# DOWNLOAD TICKER LIST
+# ==============================
+def download_ticker_list(filename):
+    """Download daftar ticker dari file tertentu (sudah include suffix)"""
+    url = f"{GITHUB_RAW_BASE}{filename}"
+    try:
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            tickers = [line.strip().upper() for line in response.text.splitlines() if line.strip()]
+            print(f"✓ Loaded {len(tickers)} tickers from {filename}")
+            return tickers
+    except Exception as e:
+        print(f"✗ Error: {e}")
+    return []
+
+# ==============================
+# GET FREE FLOAT
 # ==============================
 def get_free_float(ticker):
-    ticker_clean = ticker.split(".")[0]
-    ticker_yf = ticker_clean + ".JK"
-
+    """Get free float data untuk satu ticker (ticker sudah include suffix)"""
     for attempt in range(MAX_RETRY):
         try:
             with suppress_stderr():
-                stock = yf.Ticker(ticker_yf)
+                stock = yf.Ticker(ticker)
                 info = stock.info
 
             shares_outstanding = info.get('sharesOutstanding')
             float_shares = info.get('floatShares')
 
             free_float_pct = None
-            if shares_outstanding and float_shares:
+            if shares_outstanding and float_shares and shares_outstanding > 0:
                 free_float_pct = (float_shares / shares_outstanding) * 100
 
             return {
-                "Ticker": ticker_clean,
+                "Ticker": ticker,
                 "Shares Outstanding": shares_outstanding,
                 "Float Shares": float_shares,
                 "Free Float (%)": round(free_float_pct, 2) if free_float_pct else None
@@ -92,19 +98,19 @@ def get_free_float(ticker):
                 print(f"⚠️ RATE LIMIT! Tunggu {wait_time} detik...")
                 time.sleep(wait_time)
             else:
-                print(f"⚠️ Retry {attempt+1}/{MAX_RETRY} {ticker_clean} error: {e}")
+                print(f"⚠️ Retry {attempt+1}/{MAX_RETRY} {ticker} error: {e}")
                 if attempt < MAX_RETRY - 1:
                     time.sleep(random.uniform(3, 7))
 
     return {
-        "Ticker": ticker_clean,
+        "Ticker": ticker,
         "Shares Outstanding": None,
         "Float Shares": None,
         "Free Float (%)": None
     }
 
 # ==============================
-# SAVE TO SQLITE (REPLACE = UPDATE)
+# SAVE TO SQLITE
 # ==============================
 def append_to_db(result, db_path):
     try:
@@ -142,44 +148,79 @@ def append_to_db(result, db_path):
 # MAIN
 # ==============================
 def main():
-    if not os.path.exists(TICKER_FILE):
-        print("❌ ticker.txt tidak ditemukan")
+    # Ambil daftar file ticker dari GitHub
+    ticker_files = get_ticker_files()
+    
+    if not ticker_files:
+        print("❌ Tidak bisa mengambil daftar file dari GitHub")
         return
-
-    tickers = load_tickers(TICKER_FILE)
-
+    
+    # Tampilkan pilihan
+    print("\n📁 File ticker yang tersedia:")
+    for i, f in enumerate(ticker_files, 1):
+        print(f"  {i}. {f}")
+    
+    # Input pilihan
+    while True:
+        try:
+            choice = int(input("\nPilih nomor file: "))
+            if 1 <= choice <= len(ticker_files):
+                selected_file = ticker_files[choice-1]
+                break
+        except:
+            print("❌ Masukkan nomor yang benar")
+    
+    # Download ticker list
+    country_name = selected_file.replace('.txt', '')
+    tickers = download_ticker_list(selected_file)
+    
     if not tickers:
         print("❌ Tidak ada ticker")
         return
-
+    
+    # Buat folder penyimpanan
+    save_dir = f"{BASE_STORAGE}/{country_name}"
+    os.makedirs(save_dir, exist_ok=True)
+    db_path = f"{save_dir}/{DB_NAME}"
+    
     print(f"\n{'='*50}")
-    print(f"TOTAL TICKER : {len(tickers)}")
-    print(f"MODE         : ALWAYS UPDATE")
-    print(f"DB PATH      : {DB_PATH}")
+    print(f"NEGARA        : {country_name}")
+    print(f"TOTAL TICKER  : {len(tickers)}")
+    print(f"MODE          : ALWAYS UPDATE")
+    print(f"DB PATH       : {db_path}")
     print(f"{'='*50}\n")
-
+    
+    # Proses dengan ThreadPool
     with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {executor.submit(get_free_float, t): t for t in tickers}
-
+        
+        success_count = 0
         for i, future in enumerate(concurrent.futures.as_completed(futures)):
             ticker = futures[future]
-
+            
             try:
                 result = future.result()
-                saved = append_to_db(result, DB_PATH)
-
-                status = "OK" if result['Free Float (%)'] else "NO DATA"
-
+                saved = append_to_db(result, db_path)
+                
+                if result['Free Float (%)'] is not None:
+                    success_count += 1
+                    status = f"OK ({result['Free Float (%)']}%)"
+                else:
+                    status = "NO DATA"
+                
                 print(f"[{i+1}/{len(tickers)}] {result['Ticker']} -> {status}")
-
+                
             except Exception as e:
-                print(f"{ticker} ERROR: {e}")
-
+                print(f"[{i+1}/{len(tickers)}] {ticker} ERROR: {e}")
+            
             delay = random.uniform(DELAY_MIN, DELAY_MAX)
             time.sleep(delay)
-
-    print("\n✅ DONE")
-    print(f"💾 Database: {DB_PATH}")
+    
+    print(f"\n{'='*50}")
+    print(f"✅ SELESAI")
+    print(f"📊 Berhasil: {success_count}/{len(tickers)} ticker")
+    print(f"💾 Database: {db_path}")
+    print(f"{'='*50}")
 
 # ==============================
 if __name__ == "__main__":
