@@ -6,6 +6,7 @@ import random
 from datetime import datetime, timedelta
 import requests
 import shutil
+import glob
 
 # =====================================
 # CONFIGURATION
@@ -17,7 +18,7 @@ END_DATE = datetime.today().strftime("%Y-%m-%d")
 DELAY_MIN = 1
 DELAY_MAX = 3
 MAX_RETRY = 3
-CHECKPOINT_EVERY = 5  # SAVE SETIAP 5 EMITEN
+CHECKPOINT_EVERY = 10  # SAVE SETIAP 10 EMITEN (ubah dari 5 ke 10)
 
 # =====================================
 # FUNCTIONS
@@ -91,19 +92,44 @@ def get_processed_tickers(parquet_file):
             return [], None
     return [], None
 
+def cleanup_temp_files(save_dir, parquet_file):
+    """Bersihkan file temporary checkpoint yang tidak terpakai"""
+    try:
+        # Hapus semua file checkpoint temporary
+        temp_files = glob.glob(f"{save_dir}/*.checkpoint_*.tmp")
+        for temp_file in temp_files:
+            os.remove(temp_file)
+            print(f"  🗑️ Cleaned up: {os.path.basename(temp_file)}")
+        
+        # Hapus juga file checkpoint lama (selain yang utama)
+        checkpoint_files = glob.glob(f"{parquet_file}.checkpoint_*.tmp")
+        for cf in checkpoint_files:
+            if cf != parquet_file:  # Jangan hapus file utama
+                os.remove(cf)
+                print(f"  🗑️ Cleaned up: {os.path.basename(cf)}")
+        
+        return True
+    except Exception as e:
+        print(f"  ⚠️ Failed to cleanup: {e}")
+        return False
+
 # =====================================
 # MAIN
 # =====================================
 def main():
+    print("\n" + "="*60)
+    print("📊 HISTORICAL PRICE DOWNLOADER WITH CHECKPOINT RESUME")
+    print("="*60)
+    
     # Ambil daftar file ticker dari GitHub
     ticker_files = get_ticker_files()
     
     if not ticker_files:
-        print("Tidak bisa mengambil daftar file dari GitHub")
+        print("❌ Tidak bisa mengambil daftar file dari GitHub")
         return
     
     # Tampilkan pilihan
-    print("\nFile ticker yang tersedia:")
+    print("\n📁 File ticker yang tersedia:")
     for i, f in enumerate(ticker_files, 1):
         print(f"  {i}. {f}")
     
@@ -115,7 +141,7 @@ def main():
                 selected_file = ticker_files[choice-1]
                 break
         except:
-            print("Masukkan nomor yang benar")
+            print("❌ Masukkan nomor yang benar")
     
     # Download ticker list
     all_tickers = download_ticker_list(selected_file)
@@ -137,17 +163,19 @@ def main():
     tickers_to_process = [t for t in all_tickers if t not in processed_tickers]
     
     if not tickers_to_process:
-        print(f"✓ Semua {len(all_tickers)} ticker sudah terdownload!")
+        print(f"\n✅ Semua {len(all_tickers)} ticker sudah terdownload!")
+        # Bersihkan file temporary jika ada
+        cleanup_temp_files(save_dir, parquet_file)
         return
     
-    print(f"\n📊 Total tickers: {len(all_tickers)}")
-    print(f"📈 Already processed: {len(processed_tickers)}")
-    print(f"🔄 To process: {len(tickers_to_process)}")
+    print(f"\n📊 Total tickers: {len(all_tickers):,}")
+    print(f"📈 Already processed: {len(processed_tickers):,}")
+    print(f"🔄 To process: {len(tickers_to_process):,}")
     
     # Konfirmasi lanjut
-    confirm = input(f"\nLanjut download {len(tickers_to_process)} ticker? (y/n): ")
+    confirm = input(f"\nLanjut download {len(tickers_to_process):,} ticker? (y/n): ")
     if confirm.lower() != 'y':
-        print("Dibatalkan")
+        print("❌ Dibatalkan")
         return
     
     # Siapkan checkpoint counter
@@ -155,18 +183,22 @@ def main():
     all_data = []
     successful_tickers = 0
     failed_tickers = []
+    start_time = time.time()
     
     # Download data untuk setiap ticker yang belum diproses
     for i, ticker in enumerate(tickers_to_process):
         current_num = len(processed_tickers) + i + 1
-        print(f"[{current_num}/{len(all_tickers)}] {ticker}", end=" ")
+        progress_pct = (current_num / len(all_tickers)) * 100
+        
+        # Tampilkan progress
+        print(f"[{current_num:>5}/{len(all_tickers)}] ({progress_pct:>5.1f}%) {ticker:<10} ", end="")
         
         start_request = START_DATE_DEFAULT
         if existing_df is not None:
             last_date = existing_df[existing_df["Ticker"] == ticker]["Date"].max()
             if pd.notnull(last_date):
                 start_request = (last_date - timedelta(days=5)).strftime("%Y-%m-%d")
-                print(f"(from {last_date.strftime('%Y-%m-%d')})", end=" ")
+                print(f"(from {last_date.strftime('%Y-%m-%d')}) ", end="")
         
         downloaded = False
         for attempt in range(MAX_RETRY):
@@ -196,7 +228,7 @@ def main():
             failed_tickers.append(ticker)
             print("✗ FAILED")
         
-        # CHECKPOINT: Simpan setiap 5 emiten
+        # CHECKPOINT: Simpan setiap 10 emiten (atau di akhir)
         if (i + 1) % CHECKPOINT_EVERY == 0 or (i + 1) == len(tickers_to_process):
             if all_data:
                 # Gabungkan data baru dengan existing
@@ -217,6 +249,13 @@ def main():
                 # Update existing_df untuk checkpoint berikutnya
                 existing_df = final_df
                 all_data = []  # Kosongkan buffer setelah disimpan
+                
+                # Tampilkan estimasi waktu selesai
+                elapsed = time.time() - start_time
+                avg_time = elapsed / (i + 1)
+                remaining = avg_time * (len(tickers_to_process) - i - 1)
+                if remaining > 0:
+                    print(f"     ⏱️ ETA: {remaining/60:.1f} menit")
         
         time.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
     
@@ -234,25 +273,41 @@ def main():
         print(f"\n💾 FINAL SAVE: {len(final_df)} total rows")
     
     # Laporan akhir
-    print(f"\n" + "="*50)
+    total_time = time.time() - start_time
+    print(f"\n" + "="*60)
     print(f"📊 DOWNLOAD COMPLETED")
-    print(f"✓ Successful: {successful_tickers} tickers")
-    print(f"✗ Failed: {len(failed_tickers)} tickers")
+    print(f"="*60)
+    print(f"✓ Successful: {successful_tickers:,} tickers")
+    print(f"✗ Failed: {len(failed_tickers):,} tickers")
     if failed_tickers:
         print(f"  Failed list: {', '.join(failed_tickers[:10])}")
         if len(failed_tickers) > 10:
             print(f"  ... and {len(failed_tickers)-10} more")
     print(f"💾 Saved to: {parquet_file}")
     print(f"📈 Total rows: {len(final_df) if 'final_df' in locals() else len(existing_df) if existing_df is not None else 0}")
-    print("="*50)
+    print(f"⏱️ Total time: {total_time/60:.1f} minutes")
+    print(f"⚡ Average: {total_time/len(tickers_to_process):.1f} seconds/ticker")
+    print("="*60)
+    
+    # CLEANUP: Bersihkan file temporary
+    print("\n🧹 Cleaning up temporary files...")
+    cleanup_temp_files(save_dir, parquet_file)
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n\n⚠️ PROCESS INTERRUPTED BY USER")
+        print("\n\n" + "="*60)
+        print("⚠️ PROCESS INTERRUPTED BY USER")
+        print("="*60)
         print("✅ Data from completed tickers has been saved to checkpoint files")
+        print("💾 Final file (price_history.parquet) is safe")
         print("▶️ Run the script again to resume from where it stopped")
+        print("="*60)
     except Exception as e:
         print(f"\n❌ ERROR: {e}")
         print("✅ Checkpoint data is safe, you can resume by running again")
+    finally:
+        # Tetap bersihkan file temporary meskipun ada error
+        if 'save_dir' in locals() and 'parquet_file' in locals():
+            cleanup_temp_files(save_dir, parquet_file)
