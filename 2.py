@@ -15,7 +15,7 @@ import requests
 # ==============================
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/nosrednaluapnhoj/saham/main/data/tickers/"
 BASE_STORAGE = "/storage/emulated/0/Saham"
-DB_NAME = "freefloat.db"
+DB_NAME = "fundamental_data.db"
 
 DELAY_MIN = 1
 DELAY_MAX = 3
@@ -186,7 +186,6 @@ def main():
     print(f"\n{'='*50}")
     print(f"NEGARA        : {country_name}")
     print(f"TOTAL TICKER  : {len(tickers)}")
-    print(f"MODE          : ALWAYS UPDATE")
     print(f"DB PATH       : {db_path}")
     print(f"{'='*50}\n")
     
