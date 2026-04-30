@@ -11,21 +11,21 @@ import requests
 # ==============================
 # CONFIGURATION
 # ==============================
-GITHUB_RAW_BASE = "https://raw.githubusercontent.com/nosrednaluapnhoj/saham/main/data/tickers/"
+GITHUB_RAW_BASE = "https://raw.githubusercontent.com/nosrednaluapnhoj/saham/main/tickers/"
 BASE_STORAGE = "/storage/emulated/0/Saham"
 DB_NAME = "fundamental_data.db"
 
 DELAY_MIN = 2
 DELAY_MAX = 4
 MAX_RETRY = 3
-CHECKPOINT_EVERY = 10  # SAVE CHECKPOINT SETIAP 10 TICKER
+CHECKPOINT_EVERY = 10  # SAVE CHECKPOINT EVERY 10 TICKERS
 
 # ==============================
 # FUNCTIONS
 # ==============================
 def get_ticker_files():
-    """Ambil daftar file .txt dari folder data/tickers di GitHub"""
-    api_url = "https://api.github.com/repos/nosrednaluapnhoj/saham/contents/data/tickers"
+    """Fetch list of .txt files from tickers folder on GitHub"""
+    api_url = "https://api.github.com/repos/nosrednaluapnhoj/saham/contents/tickers"
     try:
         response = requests.get(api_url, timeout=10)
         if response.status_code == 200:
@@ -36,7 +36,7 @@ def get_ticker_files():
     return []
 
 def download_ticker_list(filename):
-    """Download daftar ticker dari file tertentu"""
+    """Download ticker list from a specific file"""
     url = f"{GITHUB_RAW_BASE}{filename}"
     try:
         response = requests.get(url, timeout=10)
@@ -49,7 +49,7 @@ def download_ticker_list(filename):
     return []
 
 def get_processed_tickers_from_db(db_path):
-    """Ambil daftar ticker yang sudah diproses dari database (source of truth)"""
+    """Get list of already processed tickers from database (source of truth)"""
     if not os.path.exists(db_path):
         return []
     
@@ -57,7 +57,6 @@ def get_processed_tickers_from_db(db_path):
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
-        # Cek apakah tabel ada
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='free_float'")
         if cursor.fetchone():
             cursor.execute("SELECT Ticker FROM free_float")
@@ -72,7 +71,7 @@ def get_processed_tickers_from_db(db_path):
         return []
 
 def load_checkpoint(checkpoint_file):
-    """Load daftar ticker dari file checkpoint (backup untuk resume cepat)"""
+    """Load ticker list from checkpoint file (backup for quick resume)"""
     if os.path.exists(checkpoint_file):
         try:
             with open(checkpoint_file, 'r') as f:
@@ -82,18 +81,18 @@ def load_checkpoint(checkpoint_file):
     return []
 
 def save_checkpoint(processed_list, checkpoint_file):
-    """Simpan checkpoint (OVERWRITE, bukan append)"""
+    """Save checkpoint (OVERWRITE, not append)"""
     try:
         with open(checkpoint_file, 'w') as f:
             for ticker in processed_list:
                 f.write(f"{ticker}\n")
         return True
     except Exception as e:
-        print(f"⚠️ Gagal save checkpoint: {e}")
+        print(f"⚠️ Failed to save checkpoint: {e}")
         return False
 
 def remove_checkpoint(checkpoint_file):
-    """Hapus checkpoint file setelah semua selesai"""
+    """Delete checkpoint file after completion"""
     try:
         if os.path.exists(checkpoint_file):
             os.remove(checkpoint_file)
@@ -103,7 +102,7 @@ def remove_checkpoint(checkpoint_file):
     return False
 
 def get_free_float(ticker):
-    """Get free float data untuk satu ticker"""
+    """Get free float data for one ticker"""
     for attempt in range(MAX_RETRY):
         try:
             stock = yf.Ticker(ticker)
@@ -146,7 +145,6 @@ def save_to_db(result, db_path):
     try:
         conn = sqlite3.connect(db_path)
         
-        # Create table if not exists
         conn.execute("""
             CREATE TABLE IF NOT EXISTS free_float (
                 Ticker TEXT PRIMARY KEY,
@@ -181,37 +179,33 @@ def save_to_db(result, db_path):
 # ==============================
 def main():
     print("\n" + "="*60)
-    print("📊 FREE FLOAT DOWNLOADER WITH CHECKPOINT RESUME")
+    print("📊 FUNDAMENTAL DATA DOWNLOADER")
     print("="*60)
     
-    # Ambil daftar file ticker dari GitHub
     ticker_files = get_ticker_files()
     
     if not ticker_files:
-        print("❌ Tidak bisa mengambil daftar file dari GitHub")
+        print("❌ Unable to fetch file list from GitHub")
         return
     
-    # Tampilkan pilihan
-    print("\n📁 File ticker yang tersedia:")
+    print("\n📁 Available ticker files:")
     for i, f in enumerate(ticker_files, 1):
         print(f"  {i}. {f}")
     
-    # Input pilihan
     while True:
         try:
-            choice = int(input("\nPilih nomor file: "))
+            choice = int(input("\nSelect file number: "))
             if 1 <= choice <= len(ticker_files):
                 selected_file = ticker_files[choice-1]
                 break
         except:
-            print("❌ Masukkan nomor yang benar")
+            print("❌ Please enter a valid number")
     
-    # Setup
     country_name = selected_file.replace('.txt', '')
     all_tickers = download_ticker_list(selected_file)
     
     if not all_tickers:
-        print("❌ Tidak ada ticker")
+        print("❌ No tickers found")
         return
     
     save_dir = f"{BASE_STORAGE}/{country_name}"
@@ -219,45 +213,37 @@ def main():
     db_path = f"{save_dir}/{DB_NAME}"
     checkpoint_file = f"{save_dir}/checkpoint.txt"
     
-    # Ambil daftar ticker yang sudah diproses
-    print("\n🔍 Memeriksa data yang sudah ada...")
+    print("\n🔍 Checking existing data...")
     processed_from_db = get_processed_tickers_from_db(db_path)
     processed_from_checkpoint = load_checkpoint(checkpoint_file)
     
-    # Gabungkan dan unique (prioritaskan database sebagai source of truth)
     processed_tickers = list(set(processed_from_db + processed_from_checkpoint))
-    
-    # Filter ticker yang belum diproses
     tickers_to_process = [t for t in all_tickers if t not in processed_tickers]
     
-    # Statistik
     print("\n" + "="*60)
-    print(f"📊 STATISTIK DOWNLOAD")
+    print(f"📊 DOWNLOAD STATISTICS")
     print("="*60)
-    print(f"🌏 Negara           : {country_name}")
-    print(f"📈 Total ticker     : {len(all_tickers):,}")
-    print(f"✅ Sudah diproses   : {len(processed_tickers):,}")
-    print(f"🔄 Belum diproses   : {len(tickers_to_process):,}")
-    print(f"💾 Database path    : {db_path}")
+    print(f"🌏 Country          : {country_name}")
+    print(f"📈 Total tickers   : {len(all_tickers):,}")
+    print(f"✅ Processed       : {len(processed_tickers):,}")
+    print(f"🔄 Remaining       : {len(tickers_to_process):,}")
+    print(f"💾 Database path   : {db_path}")
     if os.path.exists(checkpoint_file):
-        print(f"📝 Checkpoint found : {checkpoint_file}")
+        print(f"📝 Checkpoint found: {checkpoint_file}")
     print("="*60)
     
     if not tickers_to_process:
-        print("\n✅ SEMUA TICKER SUDAH DIPROSES!")
-        # Hapus checkpoint jika ada
+        print("\n✅ ALL TICKERS ALREADY PROCESSED!")
         if remove_checkpoint(checkpoint_file):
-            print("📝 Checkpoint file dihapus (pekerjaan selesai)")
+            print("📝 Checkpoint file removed (job complete)")
         return
     
-    # Konfirmasi lanjut
-    confirm = input(f"\nLanjut download {len(tickers_to_process):,} ticker? (y/n): ")
+    confirm = input(f"\nProceed to download {len(tickers_to_process):,} tickers? (y/n): ")
     if confirm.lower() != 'y':
-        print("❌ Dibatalkan")
+        print("❌ Cancelled")
         return
     
-    # Proses ticker yang belum
-    print("\n🚀 Memulai download...\n")
+    print("\n🚀 Starting download...\n")
     success_count = 0
     fail_count = 0
     temp_processed = processed_tickers.copy()
@@ -267,14 +253,11 @@ def main():
         current_num = len(processed_tickers) + i + 1
         progress_pct = (current_num / len(all_tickers)) * 100
         
-        # Tampilkan progress
         print(f"[{current_num:>5}/{len(all_tickers)}] ({progress_pct:>5.1f}%) {ticker:<10} ", end="")
         
-        # Download data
         result = get_free_float(ticker)
         saved = save_to_db(result, db_path)
         
-        # Update status
         if result['Free Float (%)'] is not None:
             success_count += 1
             print(f"✓ {result['Free Float (%)']:>6.2f}%")
@@ -282,37 +265,31 @@ def main():
             fail_count += 1
             print(f"✗ NO DATA")
         
-        # Update processed list
         temp_processed.append(ticker)
         
-        # CHECKPOINT: Simpan setiap 10 ticker
         if (i + 1) % CHECKPOINT_EVERY == 0:
             save_checkpoint(temp_processed, checkpoint_file)
             elapsed = time.time() - start_time
             avg_time = elapsed / (i + 1)
             remaining = avg_time * (len(tickers_to_process) - i - 1)
-            print(f"  💾 Checkpoint saved ({current_num}/{len(all_tickers)}) | ETA: {remaining/60:.1f} menit")
+            print(f"  💾 Checkpoint saved ({current_num}/{len(all_tickers)}) | ETA: {remaining/60:.1f} minutes")
         
-        # Random delay untuk hindari rate limit
         delay = random.uniform(DELAY_MIN, DELAY_MAX)
         time.sleep(delay)
     
-    # FINAL STEP: Semua selesai
     print("\n" + "="*60)
-    print("✅ PROSES SELESAI!")
+    print("✅ PROCESS COMPLETED!")
     print("="*60)
-    print(f"📊 Ticker baru sukses : {success_count:,}")
-    print(f"⚠️  Ticker baru gagal  : {fail_count:,}")
-    print(f"📈 Total di database  : {len(all_tickers):,}")
-    print(f"💾 Database lokasi    : {db_path}")
+    print(f"📊 New successful tickers : {success_count:,}")
+    print(f"⚠️  New failed tickers    : {fail_count:,}")
+    print(f"📈 Total in database      : {len(all_tickers):,}")
+    print(f"💾 Database location      : {db_path}")
     
-    # Hapus checkpoint karena semua sudah selesai
     if remove_checkpoint(checkpoint_file):
-        print("📝 Checkpoint file dihapus (pekerjaan selesai)")
+        print("📝 Checkpoint file removed (job complete)")
     
-    # Tampilkan waktu eksekusi
     total_time = time.time() - start_time
-    print(f"⏱️  Waktu eksekusi     : {total_time/60:.1f} menit")
+    print(f"⏱️  Execution time        : {total_time/60:.1f} minutes")
     print("="*60)
 
 # ==============================
@@ -321,20 +298,19 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         print("\n\n" + "="*60)
-        print("⚠️ PROSES DIHENTIKAN OLEH USER")
+        print("⚠️ PROCESS INTERRUPTED BY USER")
         print("="*60)
-        print("✅ Data ticker yang sudah diproses TERSIMPAN di database")
-        print("📝 Checkpoint juga telah disimpan")
-        print("▶️ Jalankan ulang script untuk melanjutkan dari ticker terakhir")
+        print("✅ Processed data is safely stored in database")
+        print("📝 Checkpoint has also been saved")
+        print("▶️ Run the script again to resume from last ticker")
         print("="*60)
         
-        # Tetap simpan checkpoint saat interrupt
         if 'temp_processed' in locals() and 'checkpoint_file' in locals():
             save_checkpoint(temp_processed, checkpoint_file)
             print("💾 Checkpoint saved, you can resume later")
     except Exception as e:
         print(f"\n❌ ERROR: {e}")
-        print("✅ Data aman, jalankan ulang untuk resume")
+        print("✅ Data is safe, rerun to resume")
         if 'temp_processed' in locals() and 'checkpoint_file' in locals():
             save_checkpoint(temp_processed, checkpoint_file)
             print("💾 Checkpoint saved")
