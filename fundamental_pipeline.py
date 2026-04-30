@@ -223,7 +223,7 @@ def main():
     print("\n" + "="*60)
     print(f"📊 DOWNLOAD STATISTICS")
     print("="*60)
-    print(f"🌏 Country          : {country_name}")
+    print(f"🌏 Country         : {country_name}")
     print(f"📈 Total tickers   : {len(all_tickers):,}")
     print(f"✅ Processed       : {len(processed_tickers):,}")
     print(f"🔄 Remaining       : {len(tickers_to_process):,}")
