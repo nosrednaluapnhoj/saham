@@ -1,3 +1,18 @@
+# -*- coding: utf-8 -*-
+import sys
+import io
+
+# Force UTF-8 output (penting untuk terminal Android/Termux)
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+else:
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8')
+else:
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+
 import yfinance as yf
 import pandas as pd
 import os
@@ -21,6 +36,18 @@ MAX_RETRY = 3
 CHECKPOINT_EVERY = 10
 
 # =====================================
+# SAFE PRINT (ASCII only, no emoji)
+# =====================================
+def safe_print(msg, end='\n'):
+    """Print dengan encoding UTF-8, replace character yang tidak didukung"""
+    try:
+        print(msg, end=end)
+    except UnicodeEncodeError:
+        # fallback: replace problematic chars
+        safe_msg = msg.encode('utf-8', errors='replace').decode('utf-8')
+        print(safe_msg, end=end)
+
+# =====================================
 # FUNCTIONS
 # =====================================
 def get_ticker_files():
@@ -28,6 +55,7 @@ def get_ticker_files():
     api_url = "https://api.github.com/repos/nosrednaluapnhoj/saham/contents/tickers"
     try:
         response = requests.get(api_url, timeout=10)
+        response.encoding = 'utf-8'
         if response.status_code == 200:
             files = [f['name'] for f in response.json() if f['name'].endswith('.txt')]
             return sorted(files)
@@ -40,12 +68,13 @@ def download_ticker_list(filename):
     url = f"{GITHUB_RAW_BASE}{filename}"
     try:
         response = requests.get(url, timeout=10)
+        response.encoding = 'utf-8'
         if response.status_code == 200:
             tickers = [line.strip() for line in response.text.splitlines() if line.strip()]
-            print(f"âœ“ Loaded {len(tickers)} tickers from {filename}")
+            safe_print(f"[OK] Loaded {len(tickers)} tickers from {filename}")
             return tickers
     except Exception as e:
-        print(f"âœ— Error: {e}")
+        safe_print(f"[ERROR] {e}")
     return []
 
 def clean_downloaded_data(df, ticker_symbol):
@@ -56,7 +85,7 @@ def clean_downloaded_data(df, ticker_symbol):
     df = df.reset_index()
     df["Date"] = pd.to_datetime(df["Date"]).dt.tz_localize(None)
     df.columns = [str(col).strip() for col in df.columns]
-    df["Ticker"] = ticker_symbol
+    df["Ticker"] = str(ticker_symbol)
     required_cols = ["Ticker", "Date", "Open", "High", "Low", "Close", "Volume"]
     existing_cols = [c for c in required_cols if c in df.columns]
     return df[existing_cols]
@@ -65,12 +94,12 @@ def save_checkpoint(final_df, parquet_file, checkpoint_num, total_tickers):
     """Save data to a temporary file and then rename it (atomic operation)"""
     temp_file = parquet_file + f".checkpoint_{checkpoint_num}.tmp"
     try:
-        final_df.to_parquet(temp_file, index=False)
+        final_df.to_parquet(temp_file, index=False, engine='pyarrow')
         shutil.move(temp_file, parquet_file)
-        print(f"  ðŸ’¾ CHECKPOINT {checkpoint_num}: Saved {len(final_df):,} rows")
+        safe_print(f" [CHECKPOINT {checkpoint_num}] Saved {len(final_df):,} rows")
         return True
     except Exception as e:
-        print(f"  âš ï¸ Failed to save checkpoint: {e}")
+        safe_print(f" [WARN] Failed to save checkpoint: {e}")
         if os.path.exists(temp_file):
             try:
                 os.remove(temp_file)
@@ -82,13 +111,15 @@ def get_processed_tickers(parquet_file):
     """Get list of already processed tickers from parquet file"""
     if os.path.exists(parquet_file):
         try:
-            existing_df = pd.read_parquet(parquet_file)
+            existing_df = pd.read_parquet(parquet_file, engine='pyarrow')
             existing_df["Date"] = pd.to_datetime(existing_df["Date"]).dt.tz_localize(None)
+            for col in existing_df.select_dtypes(include='object').columns:
+                existing_df[col] = existing_df[col].astype(str)
             processed = existing_df['Ticker'].unique().tolist()
-            print(f"âœ“ Found {len(processed):,} already processed tickers")
+            safe_print(f"[OK] Found {len(processed):,} already processed tickers")
             return processed, existing_df
         except Exception as e:
-            print(f"âš ï¸ Error reading existing file: {e}")
+            safe_print(f"[WARN] Error reading existing file: {e}")
             return [], None
     return [], None
 
@@ -98,16 +129,15 @@ def cleanup_temp_files(save_dir, parquet_file):
         temp_files = glob.glob(f"{save_dir}/*.checkpoint_*.tmp")
         for temp_file in temp_files:
             os.remove(temp_file)
-            print(f"  ðŸ—‘ï¸ Cleaned up: {os.path.basename(temp_file)}")
-
+            safe_print(f" [CLEANUP] Removed: {os.path.basename(temp_file)}")
         checkpoint_files = glob.glob(f"{parquet_file}.checkpoint_*.tmp")
         for cf in checkpoint_files:
             if cf != parquet_file:
                 os.remove(cf)
-                print(f"  ðŸ—‘ï¸ Cleaned up: {os.path.basename(cf)}")
+                safe_print(f" [CLEANUP] Removed: {os.path.basename(cf)}")
         return True
     except Exception as e:
-        print(f"  âš ï¸ Failed to cleanup: {e}")
+        safe_print(f" [WARN] Failed to cleanup: {e}")
         return False
 
 def download_with_retry(ticker, start_date, end_date):
@@ -136,17 +166,17 @@ def mode_fresh_download(all_tickers, parquet_file, save_dir):
     tickers_to_process = [t for t in all_tickers if t not in processed_tickers]
 
     if not tickers_to_process:
-        print(f"\nâœ… All {len(all_tickers):,} tickers already downloaded!")
+        safe_print(f"\n[OK] All {len(all_tickers):,} tickers already downloaded!")
         cleanup_temp_files(save_dir, parquet_file)
         return
 
-    print(f"\nðŸ“Š Total tickers   : {len(all_tickers):,}")
-    print(f"ðŸ“ˆ Already done    : {len(processed_tickers):,}")
-    print(f"ðŸ”„ To process      : {len(tickers_to_process):,}")
+    safe_print(f"\n[DATA] Total tickers : {len(all_tickers):,}")
+    safe_print(f"[DATA] Already done : {len(processed_tickers):,}")
+    safe_print(f"[DATA] To process    : {len(tickers_to_process):,}")
 
     confirm = input(f"\nProceed to download {len(tickers_to_process):,} tickers? (y/n): ")
     if confirm.lower() != 'y':
-        print("âŒ Cancelled")
+        safe_print("[CANCEL] Cancelled")
         return
 
     checkpoint_counter = len(processed_tickers) // CHECKPOINT_EVERY
@@ -158,20 +188,19 @@ def mode_fresh_download(all_tickers, parquet_file, save_dir):
     for i, ticker in enumerate(tickers_to_process):
         current_num = len(processed_tickers) + i + 1
         progress_pct = (current_num / len(all_tickers)) * 100
-
-        print(f"[{current_num:>5}/{len(all_tickers)}] ({progress_pct:>5.1f}%) {ticker:<10} ", end="")
+        safe_print(f"[{current_num:>5}/{len(all_tickers)}] ({progress_pct:>5.1f}%) {ticker:<10} ", end="")
 
         try:
             df_clean = download_with_retry(ticker, START_DATE_DEFAULT, END_DATE)
             if not df_clean.empty:
                 all_data.append(df_clean)
                 successful_tickers += 1
-                print("âœ“")
+                safe_print("[OK]")
             else:
-                print("âš ï¸ no data")
+                safe_print("[WARN] no data")
         except Exception:
             failed_tickers.append(ticker)
-            print("âœ— FAILED")
+            safe_print("[FAIL]")
 
         if (i + 1) % CHECKPOINT_EVERY == 0 or (i + 1) == len(tickers_to_process):
             if all_data:
@@ -184,11 +213,11 @@ def mode_fresh_download(all_tickers, parquet_file, save_dir):
                 existing_df = final_df
                 all_data = []
 
-                elapsed = time.time() - start_time
-                avg_time = elapsed / (i + 1)
-                remaining = avg_time * (len(tickers_to_process) - i - 1)
-                if remaining > 0:
-                    print(f"     â±ï¸ ETA: {remaining/60:.1f} minutes")
+        elapsed = time.time() - start_time
+        avg_time = elapsed / (i + 1)
+        remaining = avg_time * (len(tickers_to_process) - i - 1)
+        if remaining > 0:
+            safe_print(f" [ETA] {remaining/60:.1f} minutes")
 
         time.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
 
@@ -199,15 +228,10 @@ def mode_fresh_download(all_tickers, parquet_file, save_dir):
 # MODE 2: UPDATE (TAMBAH DATA TERBARU)
 # =====================================
 def mode_update(all_tickers, parquet_file, save_dir):
-    """
-    Update mode: for each ticker already in the parquet, download only
-    data from (last_date - 5 days) to today to append the latest prices.
-    Tickers not yet in the file will be downloaded fully.
-    """
+    """Update mode: for each ticker already in the parquet, download only data from (last_date - 5 days) to today to append the latest prices."""
     processed_tickers, existing_df = get_processed_tickers(parquet_file)
-
     if existing_df is None:
-        print("\nâš ï¸ No existing data found. Please run Fresh Download first.")
+        safe_print("\n[WARN] No existing data found. Please run Fresh Download first.")
         return
 
     today = datetime.today().date()
@@ -223,17 +247,17 @@ def mode_update(all_tickers, parquet_file, save_dir):
         else:
             tickers_new.append(ticker)
 
-    print(f"\nðŸ“Š Total tickers          : {len(all_tickers):,}")
-    print(f"ðŸ”„ Tickers need update    : {len(tickers_need_update):,}")
-    print(f"ðŸ†• New tickers (not yet dl): {len(tickers_new):,}")
+    safe_print(f"\n[DATA] Total tickers         : {len(all_tickers):,}")
+    safe_print(f"[DATA] Tickers need update   : {len(tickers_need_update):,}")
+    safe_print(f"[DATA] New tickers (not yet) : {len(tickers_new):,}")
 
     if not tickers_need_update and not tickers_new:
-        print("\nâœ… All data is already up to date!")
+        safe_print("\n[OK] All data is already up to date!")
         return
 
     confirm = input(f"\nProceed to update {len(tickers_need_update):,} + {len(tickers_new):,} new tickers? (y/n): ")
     if confirm.lower() != 'y':
-        print("âŒ Cancelled")
+        safe_print("[CANCEL] Cancelled")
         return
 
     all_work = [(t, last_d, "update") for t, last_d in tickers_need_update] + \
@@ -249,26 +273,26 @@ def mode_update(all_tickers, parquet_file, save_dir):
     for i, (ticker, last_date, kind) in enumerate(all_work):
         if kind == "update":
             start_req = (last_date - timedelta(days=5)).strftime("%Y-%m-%d")
-            label = f"â†‘UPDATE (dari {last_date})"
+            label = f"UPDATE (from {last_date})"
         else:
             start_req = START_DATE_DEFAULT
-            label = "ðŸ†• NEW"
+            label = "NEW"
 
         progress_pct = ((i + 1) / len(all_work)) * 100
-        print(f"[{i+1:>5}/{len(all_work)}] ({progress_pct:>5.1f}%) {ticker:<10} {label} ", end="")
+        safe_print(f"[{i+1:>5}/{len(all_work)}] ({progress_pct:>5.1f}%) {ticker:<10} {label} ", end="")
 
         try:
             df_clean = download_with_retry(ticker, start_req, END_DATE)
             if not df_clean.empty:
                 all_data.append(df_clean)
                 successful += 1
-                print(f"âœ“ (+{len(df_clean)} rows)")
+                safe_print(f"[OK] (+{len(df_clean)} rows)")
             else:
-                print("âš ï¸ no new data")
+                safe_print("[WARN] no new data")
                 skipped += 1
         except Exception as e:
             failed.append(ticker)
-            print(f"âœ— FAILED ({e})")
+            safe_print(f"[FAIL] ({e})")
 
         if (i + 1) % CHECKPOINT_EVERY == 0 or (i + 1) == len(all_work):
             if all_data:
@@ -281,11 +305,11 @@ def mode_update(all_tickers, parquet_file, save_dir):
                 existing_df = final_df
                 all_data = []
 
-                elapsed = time.time() - start_time
-                avg_time = elapsed / (i + 1)
-                remaining = avg_time * (len(all_work) - i - 1)
-                if remaining > 0:
-                    print(f"     â±ï¸ ETA: {remaining/60:.1f} minutes")
+        elapsed = time.time() - start_time
+        avg_time = elapsed / (i + 1)
+        remaining = avg_time * (len(all_work) - i - 1)
+        if remaining > 0:
+            safe_print(f" [ETA] {remaining/60:.1f} minutes")
 
         time.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
 
@@ -296,62 +320,48 @@ def mode_update(all_tickers, parquet_file, save_dir):
 # MODE 3: BACKFILL (ISI DATA MASA LALU)
 # =====================================
 def find_date_gaps(ticker_df, start_date_str, min_gap_days=7):
-    """
-    Detect gaps in historical data for a ticker.
-    A gap is a period where consecutive dates differ by more than min_gap_days
-    (accounting for weekends ~2 days + buffer).
-    Returns list of (gap_start, gap_end) tuples.
-    """
+    """Detect gaps in historical data for a ticker."""
     if ticker_df.empty:
         return [(pd.Timestamp(start_date_str), pd.Timestamp(END_DATE))]
 
     dates = ticker_df["Date"].sort_values().reset_index(drop=True)
     gaps = []
 
-    # Check gap at the beginning (before first recorded date)
     first_date = dates.iloc[0]
     start_ts = pd.Timestamp(start_date_str)
     if (first_date - start_ts).days > min_gap_days:
         gaps.append((start_ts, first_date - timedelta(days=1)))
 
-    # Check gaps between consecutive dates
     for j in range(len(dates) - 1):
         diff = (dates.iloc[j + 1] - dates.iloc[j]).days
         if diff > min_gap_days:
             gap_start = dates.iloc[j] + timedelta(days=1)
-            gap_end   = dates.iloc[j + 1] - timedelta(days=1)
+            gap_end = dates.iloc[j + 1] - timedelta(days=1)
             gaps.append((gap_start, gap_end))
-
     return gaps
 
 def mode_backfill(all_tickers, parquet_file, save_dir):
-    """
-    Backfill mode: scan each ticker's data for gaps in history,
-    then download and fill those gaps from yfinance.
-    """
+    """Backfill mode: scan each ticker's data for gaps in history, then download and fill those gaps."""
     processed_tickers, existing_df = get_processed_tickers(parquet_file)
-
     if existing_df is None:
-        print("\nâš ï¸ No existing data found. Please run Fresh Download first.")
+        safe_print("\n[WARN] No existing data found. Please run Fresh Download first.")
         return
 
-    # Backfill settings
-    print("\nâš™ï¸  Backfill Settings:")
+    safe_print("\n[SETUP] Backfill Settings:")
     try:
-        start_year = input(f"   Backfill from year (default {START_DATE_DEFAULT[:4]}): ").strip()
+        start_year = input(f" Backfill from year (default {START_DATE_DEFAULT[:4]}): ").strip()
         backfill_start = f"{start_year}-01-01" if start_year.isdigit() and len(start_year) == 4 else START_DATE_DEFAULT
     except:
         backfill_start = START_DATE_DEFAULT
 
     try:
-        min_gap = int(input("   Minimum gap to fill in days (default 7): ").strip() or "7")
+        min_gap = int(input(" Minimum gap to fill in days (default 7): ").strip() or "7")
     except:
         min_gap = 7
 
-    print(f"\nðŸ” Scanning gaps from {backfill_start} with min gap = {min_gap} days...")
-    print("   (This may take a moment for large datasets)")
+    safe_print(f"\n[SCAN] Scanning gaps from {backfill_start} with min gap = {min_gap} days...")
+    safe_print(" (This may take a moment for large datasets)")
 
-    # Scan all tickers for gaps
     tickers_with_gaps = []
     for ticker in all_tickers:
         if ticker not in processed_tickers:
@@ -362,27 +372,26 @@ def mode_backfill(all_tickers, parquet_file, save_dir):
             tickers_with_gaps.append((ticker, gaps))
 
     total_gaps = sum(len(g) for _, g in tickers_with_gaps)
-    print(f"\nðŸ“‹ Backfill Summary:")
-    print(f"   Tickers scanned     : {len(all_tickers):,}")
-    print(f"   Tickers with gaps   : {len(tickers_with_gaps):,}")
-    print(f"   Total gaps found    : {total_gaps:,}")
+    safe_print(f"\n[SUMMARY] Backfill Summary:")
+    safe_print(f" Tickers scanned    : {len(all_tickers):,}")
+    safe_print(f" Tickers with gaps  : {len(tickers_with_gaps):,}")
+    safe_print(f" Total gaps found   : {total_gaps:,}")
 
     if not tickers_with_gaps:
-        print("\nâœ… No gaps found! Data is complete.")
+        safe_print("\n[OK] No gaps found! Data is complete.")
         return
 
-    # Preview sample gaps
-    print("\nðŸ“Œ Sample gaps (first 5 tickers):")
+    safe_print("\n[SAMPLE] Sample gaps (first 5 tickers):")
     for ticker, gaps in tickers_with_gaps[:5]:
-        print(f"   {ticker}:")
+        safe_print(f" {ticker}:")
         for gs, ge in gaps[:3]:
-            print(f"      {gs.strftime('%Y-%m-%d')} â†’ {ge.strftime('%Y-%m-%d')} ({(ge-gs).days} days)")
+            safe_print(f"   {gs.strftime('%Y-%m-%d')} -> {ge.strftime('%Y-%m-%d')} ({(ge-gs).days} days)")
         if len(gaps) > 3:
-            print(f"      ... and {len(gaps)-3} more gaps")
+            safe_print(f"   ... and {len(gaps)-3} more gaps")
 
     confirm = input(f"\nProceed to backfill {total_gaps:,} gaps across {len(tickers_with_gaps):,} tickers? (y/n): ")
     if confirm.lower() != 'y':
-        print("âŒ Cancelled")
+        safe_print("[CANCEL] Cancelled")
         return
 
     all_data = []
@@ -395,33 +404,31 @@ def mode_backfill(all_tickers, parquet_file, save_dir):
     total_tasks = len(tickers_with_gaps)
 
     for idx, (ticker, gaps) in enumerate(tickers_with_gaps):
-        print(f"\n[{idx+1:>4}/{total_tasks}] {ticker} â€” {len(gaps)} gap(s)")
-
+        safe_print(f"\n[{idx+1:>4}/{total_tasks}] {ticker} -- {len(gaps)} gap(s)")
         ticker_new_data = []
         for gs, ge in gaps:
             gap_start_str = gs.strftime("%Y-%m-%d")
-            gap_end_str   = (ge + timedelta(days=1)).strftime("%Y-%m-%d")
-            print(f"       ðŸ“… {gap_start_str} â†’ {ge.strftime('%Y-%m-%d')} ", end="")
+            gap_end_str = (ge + timedelta(days=1)).strftime("%Y-%m-%d")
+            safe_print(f"  {gap_start_str} -> {ge.strftime('%Y-%m-%d')} ", end="")
 
             try:
                 df_clean = download_with_retry(ticker, gap_start_str, gap_end_str)
                 if not df_clean.empty:
                     ticker_new_data.append(df_clean)
                     successful_fills += 1
-                    print(f"âœ“ (+{len(df_clean)} rows)")
+                    safe_print(f"[OK] (+{len(df_clean)} rows)")
                 else:
                     empty_fills += 1
-                    print("âš ï¸ no data (market closed / not listed yet)")
+                    safe_print("[WARN] no data (market closed / not listed yet)")
             except Exception as e:
-                failed_fills.append(f"{ticker} [{gap_start_str}â†’{ge.strftime('%Y-%m-%d')}]")
-                print(f"âœ— FAILED ({e})")
+                failed_fills.append(f"{ticker} [{gap_start_str}->{ge.strftime('%Y-%m-%d')}]")
+                safe_print(f"[FAIL] ({e})")
 
             time.sleep(random.uniform(DELAY_MIN, DELAY_MAX))
 
         if ticker_new_data:
             all_data.extend(ticker_new_data)
-
-        total_processed += 1
+            total_processed += 1
 
         if total_processed % CHECKPOINT_EVERY == 0 or total_processed == total_tasks:
             if all_data:
@@ -434,28 +441,28 @@ def mode_backfill(all_tickers, parquet_file, save_dir):
                 existing_df = final_df
                 all_data = []
 
-                elapsed = time.time() - start_time
-                avg_time = elapsed / total_processed
-                remaining = avg_time * (total_tasks - total_processed)
-                if remaining > 0:
-                    print(f"     â±ï¸ ETA: {remaining/60:.1f} minutes")
+        elapsed = time.time() - start_time
+        avg_time = elapsed / total_processed if total_processed > 0 else 0
+        remaining = avg_time * (total_tasks - total_processed)
+        if remaining > 0:
+            safe_print(f" [ETA] {remaining/60:.1f} minutes")
 
     total_time = time.time() - start_time
-    print(f"\n{'='*60}")
-    print(f"ðŸ” BACKFILL COMPLETED")
-    print(f"{'='*60}")
-    print(f"âœ“ Gaps filled (with data) : {successful_fills:,}")
-    print(f"âš ï¸ Gaps empty (no trading) : {empty_fills:,}")
-    print(f"âœ— Failed                  : {len(failed_fills):,}")
+    safe_print(f"\n{'='*60}")
+    safe_print(f"[DONE] BACKFILL COMPLETED")
+    safe_print(f"{'='*60}")
+    safe_print(f"[OK] Gaps filled (with data) : {successful_fills:,}")
+    safe_print(f"[WARN] Gaps empty (no trading) : {empty_fills:,}")
+    safe_print(f"[FAIL] Failed : {len(failed_fills):,}")
     if failed_fills:
         for f in failed_fills[:10]:
-            print(f"   - {f}")
+            safe_print(f"  - {f}")
         if len(failed_fills) > 10:
-            print(f"   ... and {len(failed_fills)-10} more")
-    print(f"ðŸ’¾ Saved to: {parquet_file}")
-    print(f"ðŸ“ˆ Total rows: {len(existing_df):,}")
-    print(f"â±ï¸ Total time: {total_time/60:.1f} minutes")
-    print(f"{'='*60}")
+            safe_print(f"  ... and {len(failed_fills)-10} more")
+    safe_print(f"[SAVE] Saved to: {parquet_file}")
+    safe_print(f"[DATA] Total rows: {len(existing_df):,}")
+    safe_print(f"[TIME] Total time: {total_time/60:.1f} minutes")
+    safe_print(f"{'='*60}")
 
     cleanup_temp_files(save_dir, parquet_file)
 
@@ -464,42 +471,41 @@ def mode_backfill(all_tickers, parquet_file, save_dir):
 # =====================================
 def _print_summary(successful, failed, existing_df, parquet_file, start_time, total_processed, skipped=0):
     total_time = time.time() - start_time
-    print(f"\n{'='*60}")
-    print(f"ðŸ“Š COMPLETED")
-    print(f"{'='*60}")
-    print(f"âœ“ Successful : {successful:,}")
+    safe_print(f"\n{'='*60}")
+    safe_print(f"[DONE] COMPLETED")
+    safe_print(f"{'='*60}")
+    safe_print(f"[OK] Successful     : {successful:,}")
     if skipped:
-        print(f"â­ï¸ Skipped   : {skipped:,}")
-    print(f"âœ— Failed     : {len(failed):,}")
+        safe_print(f"[SKIP] Skipped       : {skipped:,}")
+    safe_print(f"[FAIL] Failed        : {len(failed):,}")
     if failed:
-        print(f"  Failed list: {', '.join(failed[:10])}")
+        safe_print(f" Failed list: {', '.join(failed[:10])}")
         if len(failed) > 10:
-            print(f"  ... and {len(failed)-10} more")
-    print(f"ðŸ’¾ Saved to  : {parquet_file}")
+            safe_print(f" ... and {len(failed)-10} more")
+    safe_print(f"[SAVE] Saved to      : {parquet_file}")
     row_count = len(existing_df) if existing_df is not None else 0
-    print(f"ðŸ“ˆ Total rows: {row_count:,}")
-    print(f"â±ï¸ Total time: {total_time/60:.1f} minutes")
+    safe_print(f"[DATA] Total rows    : {row_count:,}")
+    safe_print(f"[TIME] Total time    : {total_time/60:.1f} minutes")
     if total_processed > 0:
-        print(f"âš¡ Average   : {total_time/total_processed:.1f} sec/ticker")
-    print(f"{'='*60}")
+        safe_print(f"[AVG] Average       : {total_time/total_processed:.1f} sec/ticker")
+    safe_print(f"{'='*60}")
 
 # =====================================
 # MAIN MENU
 # =====================================
 def main():
-    print("\n" + "="*60)
-    print("ðŸ“Š HISTORICAL PRICE DOWNLOADER")
-    print("="*60)
+    safe_print("\n" + "="*60)
+    safe_print("HISTORICAL PRICE DOWNLOADER (UTF-8 SAFE)")
+    safe_print("="*60)
 
     ticker_files = get_ticker_files()
-
     if not ticker_files:
-        print("âŒ Unable to fetch file list from GitHub")
+        safe_print("[ERROR] Unable to fetch file list from GitHub")
         return
 
-    print("\nðŸ“ Available ticker files:")
+    safe_print("\n[FILES] Available ticker files:")
     for i, f in enumerate(ticker_files, 1):
-        print(f"  {i}. {f}")
+        safe_print(f" {i}. {f}")
 
     while True:
         try:
@@ -508,7 +514,7 @@ def main():
                 selected_file = ticker_files[choice - 1]
                 break
         except:
-            print("âŒ Please enter a valid number")
+            safe_print("[ERROR] Please enter a valid number")
 
     all_tickers = download_ticker_list(selected_file)
     if not all_tickers:
@@ -519,14 +525,13 @@ def main():
     os.makedirs(save_dir, exist_ok=True)
     parquet_file = f"{save_dir}/price_history.parquet"
 
-    # â”€â”€ MODE SELECTION â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    print("\n" + "="*60)
-    print("ðŸ› ï¸  SELECT MODE:")
-    print("="*60)
-    print("  1. ðŸ“¥ Fresh Download   â€” Download semua tickers (resume jika terputus)")
-    print("  2. ðŸ”„ Update Terbaru   â€” Tambah data terkini ke data yang sudah ada")
-    print("  3. ðŸ” Backfill History â€” Isi data historis yang kosong/gap")
-    print("="*60)
+    safe_print("\n" + "="*60)
+    safe_print("SELECT MODE:")
+    safe_print("="*60)
+    safe_print(" 1. Fresh Download   - Download semua tickers (resume jika terputus)")
+    safe_print(" 2. Update Terbaru   - Tambah data terkini ke data yang sudah ada")
+    safe_print(" 3. Backfill History - Isi data historis yang kosong/gap")
+    safe_print("="*60)
 
     while True:
         try:
@@ -535,7 +540,7 @@ def main():
                 break
         except:
             pass
-        print("âŒ Masukkan angka 1, 2, atau 3")
+        safe_print("[ERROR] Masukkan angka 1, 2, atau 3")
 
     if mode == 1:
         mode_fresh_download(all_tickers, parquet_file, save_dir)
@@ -544,18 +549,17 @@ def main():
     elif mode == 3:
         mode_backfill(all_tickers, parquet_file, save_dir)
 
-
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n\n" + "="*60)
-        print("âš ï¸  PROCESS INTERRUPTED BY USER")
-        print("="*60)
-        print("âœ… Data dari tickers yang selesai sudah disimpan ke checkpoint")
-        print("ðŸ’¾ File price_history.parquet aman")
-        print("â–¶ï¸  Jalankan script lagi untuk melanjutkan dari posisi terakhir")
-        print("="*60)
+        safe_print("\n\n" + "="*60)
+        safe_print("[STOP] PROCESS INTERRUPTED BY USER")
+        safe_print("="*60)
+        safe_print("[OK] Data dari tickers yang selesai sudah disimpan ke checkpoint")
+        safe_print("[SAVE] File price_history.parquet aman")
+        safe_print("[INFO] Jalankan script lagi untuk melanjutkan dari posisi terakhir")
+        safe_print("="*60)
     except Exception as e:
-        print(f"\nâŒ ERROR: {e}")
-        print("âœ… Checkpoint data aman, jalankan ulang untuk melanjutkan")
+        safe_print(f"\n[ERROR] {e}")
+        safe_print("[OK] Checkpoint data aman, jalankan ulang untuk melanjutkan")
