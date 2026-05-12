@@ -39,7 +39,7 @@ DEFAULT_DELAY_MAX = 3.0
 DEFAULT_MAX_RETRY = 3
 DEFAULT_CHECKPOINT_EVERY = 10
 DEFAULT_UPDATE_AFTER_DAYS = 7
-DEFAULT_MAX_WORKERS = 3  # parallel thread, hati-hati rate limit
+DEFAULT_MAX_WORKERS = 1  # parallel thread, hati-hati rate limit
 DEFAULT_RATE_LIMIT_BACKOFF_FACTOR = 2
 
 # ==============================
