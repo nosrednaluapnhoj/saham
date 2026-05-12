@@ -2,3 +2,5 @@ yfinance
 pandas
 pyarrow
 numpy
+requests
+urllib3
