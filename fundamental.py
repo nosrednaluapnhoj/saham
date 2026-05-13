@@ -34,12 +34,12 @@ __version__ = "2.0.0"
 DEFAULT_GITHUB_RAW_BASE = "https://raw.githubusercontent.com/nosrednaluapnhoj/saham/main/tickers/"
 DEFAULT_BASE_STORAGE = Path("/storage/emulated/0/Saham")  # untuk Android
 DEFAULT_DB_NAME = "fundamental_data.db"
-DEFAULT_DELAY_MIN = 1.5
-DEFAULT_DELAY_MAX = 3.0
+DEFAULT_DELAY_MIN = 2
+DEFAULT_DELAY_MAX = 4
 DEFAULT_MAX_RETRY = 3
 DEFAULT_CHECKPOINT_EVERY = 10
 DEFAULT_UPDATE_AFTER_DAYS = 7
-DEFAULT_MAX_WORKERS = 1  # parallel thread, hati-hati rate limit
+DEFAULT_MAX_WORKERS = 2  # parallel thread, hati-hati rate limit
 DEFAULT_RATE_LIMIT_BACKOFF_FACTOR = 2
 
 # ==============================
